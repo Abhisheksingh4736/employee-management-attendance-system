@@ -1,10 +1,9 @@
 <?php
 
-namespace App\Http\Controllers\Admin;
+namespace App\Http\Controllers\Employee;
 
+use App\Exceptions\AttendanceException;
 use App\Http\Controllers\Controller;
-use App\Models\Attendance;
-use App\Models\Employee;
 use App\Services\AttendanceService;
 use Illuminate\Http\Request;
 
@@ -14,24 +13,40 @@ class AttendanceController extends Controller
 
     public function index(Request $request)
     {
-        $this->authorize('viewAny', Attendance::class);
+        $employee = $request->user()->employee;
+        abort_if(! $employee, 403, 'No employee profile linked to this account.');
 
-        $filters = $request->validate([
-            'employee_id' => ['nullable', 'exists:employees,id'],
-            'date'        => ['nullable', 'date'],
-            'from'        => ['nullable', 'date'],
-            'to'          => ['nullable', 'date', 'after_or_equal:from'],
+        return view('employee.attendance.index', [
+            'today'       => $this->service->today($employee),
+            'attendances' => $this->service->paginate([
+                'employee_id' => $employee->id,   // forced, so nobody can see others' records
+                'from'        => $request->input('from'),
+                'to'          => $request->input('to'),
+            ]),
         ]);
+    }
 
-        // Absentees are shown for a single day: the chosen date, or today
-        $absentDate = $filters['date'] ?? today()->toDateString();
+    public function checkIn(Request $request)
+    {
+        return $this->perform($request, 'checkIn', 'Checked in successfully.');
+    }
 
-        return view('admin.attendance.index', [
-            'attendances' => $this->service->paginate($filters),
-            'totalHours'  => $this->service->totalHours($filters),
-            'absentees'   => $this->service->absentees($absentDate),
-            'absentDate'  => $absentDate,
-            'employees'   => Employee::with('user')->get()->sortBy('user.name'),
-        ]);
+    public function checkOut(Request $request)
+    {
+        return $this->perform($request, 'checkOut', 'Checked out successfully.');
+    }
+
+    private function perform(Request $request, string $action, string $message)
+    {
+        $employee = $request->user()->employee;
+        abort_if(! $employee, 403);
+
+        try {
+            $this->service->{$action}($employee);
+        } catch (AttendanceException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('success', $message);
     }
 }
